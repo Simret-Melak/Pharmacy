@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion'; // Kept for animations
+import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff } from 'lucide-react'; // Removed unused User icon
+import { Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 export default function Auth() {
@@ -46,19 +46,18 @@ export default function Auth() {
     try {
       const endpoint = type === 'login' ? 'login' : 'register';
       
-      // Transform data for backend
       let requestData = formData[type];
       
       if (type === 'register') {
         requestData = {
           email: formData.register.email,
           password: formData.register.password,
-          username: formData.register.email, // Use email as username
-          full_name: `${formData.register.firstName} ${formData.register.lastName}` // Combine names
+          username: formData.register.email,
+          full_name: `${formData.register.firstName} ${formData.register.lastName}`
         };
       }
       
-      console.log('Sending data:', requestData); // Debug line
+      console.log('Sending data:', requestData);
       const { data } = await axios.post(`/api/auth/${endpoint}`, requestData);
       
       if (type === 'login') {
@@ -69,7 +68,7 @@ export default function Auth() {
         setActiveTab('login');
       }
     } catch (err) {
-      console.log('Error response:', err.response?.data); // Debug line
+      console.log('Error response:', err.response?.data);
       setApiError(err.response?.data?.message || 'An error occurred');
     }
   };
@@ -86,12 +85,15 @@ export default function Auth() {
       className="min-vh-100 bg-gradient-to-br from-blue-50 via-white to-blue-50 d-flex align-items-center justify-content-center py-4"
     >
       <div className="position-relative w-100 w-md-50">
-        <AnimatePresence mode="wait">
+        {/* OUTER AnimatePresence WITHOUT mode="wait" */}
+        <AnimatePresence>
           {apiError && (
             <motion.div
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
               className="mb-4 p-3 bg-danger text-white rounded"
+              key="apiError"
             >
               {apiError}
             </motion.div>
@@ -101,7 +103,9 @@ export default function Auth() {
             <motion.div
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
               className="mb-4 p-3 bg-success text-white rounded"
+              key="successMessage"
             >
               {successMessage}
             </motion.div>
@@ -111,6 +115,7 @@ export default function Auth() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             className="bg-white shadow-lg p-5 rounded-lg"
+            key="formContainer"
           >
             {/* Tab switching buttons */}
             <div className="pb-4">
@@ -133,6 +138,7 @@ export default function Auth() {
             </div>
 
             <div className="pt-4">
+              {/* INNER AnimatePresence WITH mode="wait" to switch forms */}
               <AnimatePresence mode="wait">
                 {activeTab === 'login' ? (
                   <motion.form
