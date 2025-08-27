@@ -20,7 +20,7 @@ async function setupDatabase() {
     console.log('✅ Schema created successfully!');
   } catch (err) {
     console.error('❌ Database setup failed:', err);
-    process.exit(1); // Exit with error code
+    process.exit(1); 
   } finally {
     await client.end();
     console.log('🔌 Setup connection closed');

@@ -2,7 +2,9 @@ const express = require('express');
 const dotenv = require('dotenv');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const cors = require('cors'); // Add this
+const cors = require('cors'); 
+const path = require('path'); // ← ADD THIS LINE
+const upload = require('./config/multerConfig');
 
 dotenv.config();
 
@@ -15,7 +17,7 @@ app.set('trust proxy', 1);
 // 2. Enable CORS (for frontend communication)
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 }));
@@ -35,6 +37,11 @@ app.use('/api', limiter);
 
 // ======== ROUTES ======== //
 app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/medications', require('./routes/medicationRoutes'));
+app.use('/api', require('./routes/prescriptionRoutes')); 
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ======== ERROR HANDLING ======== //
 app.use((err, req, res, next) => {
@@ -48,7 +55,7 @@ app.use((err, req, res, next) => {
 });
 
 // ======== START SERVER ======== //
-const PORT = process.env.PORT || 5001; // Changed to 5001 to match your frontend proxy
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`ℹ️  Environment: ${process.env.NODE_ENV || 'development'}`);

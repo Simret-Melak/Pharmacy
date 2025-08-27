@@ -1,32 +1,17 @@
-
+version: '3.8'
 services:
   db:
     image: postgres:latest
     container_name: pg-dev
-    network_mode: "host"  # Add this line
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: 1992
       POSTGRES_DB: postgres
     ports:
-      - "5432:5432"
-
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: pgadmin-container
-    environment:
-      PGADMIN_DEFAULT_EMAIL: simretmelak@gmail.com
-      PGADMIN_DEFAULT_PASSWORD: 1992
-    ports:
-      - "8080:80"  # Expose pgAdmin on port 8080
-    networks:
-      - pgnetwork
-    depends_on:
-      - db  # Ensure pgAdmin waits for db to be up
-
-networks:
-  pgnetwork:
-    driver: bridge
+      - "5432:5432"  # Standard port mapping
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
 
 volumes:
   pgdata:

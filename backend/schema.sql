@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS medications (
     low_stock_threshold INT DEFAULT 10, -- Alert when stock <= this value
     is_prescription_required BOOLEAN DEFAULT FALSE,
     pharmacy_id INTEGER REFERENCES pharmacies(id), 
+    image_url VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -92,6 +93,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE TABLE IF NOT EXISTS prescriptions (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
+    medication_id INTEGER REFERENCES medications(id),
     pharmacist_id INTEGER REFERENCES users(id), -- Who approved/rejected
     status VARCHAR(50) DEFAULT 'pending', -- 'approved', 'rejected'
     notes TEXT, -- Reason for rejection
@@ -127,4 +129,19 @@ CREATE TABLE IF NOT EXISTS sales_reports (
     total_revenue DECIMAL(10, 2) DEFAULT 0,
     top_selling_products JSONB, -- {product_id, name, quantity_sold, revenue}
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 11. User Prescriptions Table (Stores user prescription history)
+CREATE TABLE IF NOT EXISTS user_prescriptions (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    medication_id INTEGER REFERENCES medications(id),
+    prescription_data JSONB, -- Stores prescription details
+    status VARCHAR(50) DEFAULT 'active',
+    issued_date TIMESTAMP,
+    expiry_date TIMESTAMP,
+    prescribing_doctor VARCHAR(255),
+    file_path TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

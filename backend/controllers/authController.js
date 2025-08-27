@@ -171,7 +171,12 @@ exports.loginUser = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { userId: user.id },
+      {
+        userId: user.id,
+        role: user.role,        
+        email: user.email,
+        pharmacyId: user.pharmacy_id
+      },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
     );
@@ -183,7 +188,9 @@ exports.loginUser = async (req, res) => {
         id: user.id,
         username: user.username,
         email: user.email,
-        is_verified: user.is_verified
+        is_verified: user.is_verified,
+        role: user.role,        
+        pharmacy_id: user.pharmacy_id
       }
     });
   } catch (error) {
