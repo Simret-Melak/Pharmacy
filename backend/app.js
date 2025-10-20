@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cors = require('cors'); 
-const path = require('path'); // ← ADD THIS LINE
+const path = require('path'); 
 const upload = require('./config/multerConfig');
 
 dotenv.config();
@@ -39,6 +39,7 @@ app.use('/api', limiter);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/medications', require('./routes/medicationRoutes'));
 app.use('/api', require('./routes/prescriptionRoutes')); 
+app.use('/api/cart', require('./routes/cartRoutes'));
 
 // Serve static files from uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
