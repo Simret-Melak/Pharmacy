@@ -40,9 +40,15 @@ const Medications = () => {
         const response = await axios.get('/api/medications', {
           headers: { Authorization: `Bearer ${token}` }
         });
-        setMedications(response.data);
-        setFilteredMedications(response.data);
+        
+        console.log('API Response:', response.data); // Debug log
+        
+        // FIX: Extract medications array from response
+        const medicationsData = response.data.medications || response.data || [];
+        setMedications(medicationsData);
+        setFilteredMedications(medicationsData);
       } catch (err) {
+        console.error('Fetch error:', err);
         setError(err.response?.data?.message || 'Error fetching medications');
       } finally {
         setLoading(false);
@@ -53,8 +59,9 @@ const Medications = () => {
   }, [navigate]);
 
   useEffect(() => {
-    const results = medications.filter(med =>
-      med.name.toLowerCase().includes(searchTerm.toLowerCase())
+    // FIX: Ensure filteredMedications is always an array
+    const results = (medications || []).filter(med =>
+      med.name && med.name.toLowerCase().includes(searchTerm.toLowerCase())
     );
     setFilteredMedications(results);
   }, [searchTerm, medications]);
@@ -75,8 +82,8 @@ const Medications = () => {
     }
   };
 
-  if (loading) return <div>Loading medications...</div>;
-  if (error) return <div className="error">{error}</div>;
+  if (loading) return <div style={{ padding: '20px', textAlign: 'center' }}>Loading medications...</div>;
+  if (error) return <div style={{ padding: '20px', textAlign: 'center', color: 'red' }}>{error}</div>;
 
   return (
     <div className="medications-container" style={{ padding: '20px' }}>
@@ -125,68 +132,76 @@ const Medications = () => {
         </div>
       </div>
 
-      <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '20px' }}>
-        <thead>
-          <tr style={{ backgroundColor: '#f2f2f2' }}>
-            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Name</th>
-            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Price</th>
-            <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Stock</th>
-            {isAdmin && (
-              <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {filteredMedications.map((med) => (
-            <tr key={med.id} style={{ borderBottom: '1px solid #ddd' }}>
-              <td style={{ padding: '12px' }}>
-                {isAdmin ? (
-                  <Link to={`/medications/edit/${med.id}`} style={{ color: '#0066cc', textDecoration: 'none' }}>
-                    {med.name}
-                  </Link>
-                ) : (
-                  med.name
-                )}
-              </td>
-              <td style={{ padding: '12px' }}>${med.price?.toFixed(2)}</td>
-              <td style={{ padding: '12px' }}>{med.stock_quantity}</td>
+      {/* FIX: Add defensive check before rendering table */}
+      {!filteredMedications || filteredMedications.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+          <h3>No medications found</h3>
+          <p>{searchTerm ? 'Try adjusting your search terms' : 'No medications available'}</p>
+        </div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '20px' }}>
+          <thead>
+            <tr style={{ backgroundColor: '#f2f2f2' }}>
+              <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Name</th>
+              <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Price</th>
+              <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Stock</th>
               {isAdmin && (
-                <td style={{ padding: '12px', display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={() => navigate(`/medications/edit/${med.id}`)}
-                    style={{
-                      padding: '5px 10px',
-                      backgroundColor: '#2196F3',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => handleDelete(med.id)}
-                    style={{
-                      padding: '5px 10px',
-                      backgroundColor: '#f44336',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '5px'
-                    }}
-                  >
-                    <FaTrash /> Delete
-                  </button>
-                </td>
+                <th style={{ padding: '12px', textAlign: 'left', borderBottom: '1px solid #ddd' }}>Actions</th>
               )}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {filteredMedications.map((med) => (
+              <tr key={med.id} style={{ borderBottom: '1px solid #ddd' }}>
+                <td style={{ padding: '12px' }}>
+                  {isAdmin ? (
+                    <Link to={`/medications/edit/${med.id}`} style={{ color: '#0066cc', textDecoration: 'none' }}>
+                      {med.name}
+                    </Link>
+                  ) : (
+                    med.name
+                  )}
+                </td>
+                <td style={{ padding: '12px' }}>${med.price?.toFixed(2)}</td>
+                <td style={{ padding: '12px' }}>{med.stock_quantity}</td>
+                {isAdmin && (
+                  <td style={{ padding: '12px', display: 'flex', gap: '10px' }}>
+                    <button
+                      onClick={() => navigate(`/medications/edit/${med.id}`)}
+                      style={{
+                        padding: '5px 10px',
+                        backgroundColor: '#2196F3',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => handleDelete(med.id)}
+                      style={{
+                        padding: '5px 10px',
+                        backgroundColor: '#f44336',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px'
+                      }}
+                    >
+                      <FaTrash /> Delete
+                    </button>
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 };

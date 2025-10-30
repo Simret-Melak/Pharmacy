@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useCallback } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import './App.css';
 import { jwtDecode } from 'jwt-decode';
@@ -18,120 +18,409 @@ const UploadPrescription = lazy(() => import('./pages/UploadPrescription'));
 const AdminPrescriptions = lazy(() => import('./pages/AdminPrescriptions'));
 const AdminPrescriptionReview = lazy(() => import('./pages/AdminPrescriptionReview'));
 const CartPage = lazy(() => import('./pages/Cart'));
-const MyPrescriptions = lazy(() => import('./pages/MyPrescriptions')); // ✅ Add this line
+const MyPrescriptions = lazy(() => import('./pages/MyPrescriptions'));
+const GuestMedications = lazy(() => import('./pages/GuestMedications'));
+const GuestCheckout = lazy(() => import('./pages/GuestCheckout'));
+const OrderStatusCheck = lazy(() => import('./pages/OrderStatusCheck'));
+const OrderConfirmation = lazy(() => import('./pages/OrderConfirmation'));
+const AdminDashboard = lazy(() => import('./pages/AdminDashboard'));
+
+// ✅ ADD: Simple Error Boundary Component
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    console.error('App Error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="container mt-5 text-center">
+          <div className="alert alert-danger">
+            <h3>Something went wrong</h3>
+            <p>Please refresh the page or try again later.</p>
+            <button 
+              className="btn btn-primary"
+              onClick={() => window.location.reload()}
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 function App() {
   const [cartCount, setCartCount] = useState(0);
-  const token = localStorage.getItem('token'); 
-  
-  const getUserFromToken = () => {
+  const [authState, setAuthState] = useState({
+    isAuthenticated: false,
+    isGuest: false,
+    user: null,
+    guest: null
+  });
+
+  const [loading, setLoading] = useState(true);
+
+  // ✅ FIX: Memoize token values to prevent unnecessary re-renders
+  const token = localStorage.getItem('token');
+  const guestToken = localStorage.getItem('guestToken');
+
+  // ✅ IMPROVED: Validate token function
+  const validateToken = useCallback((tokenToValidate, type = 'user') => {
     try {
-      if (!token) return { role: 'customer' };
-      const decoded = jwtDecode(token);
+      const decoded = jwtDecode(tokenToValidate);
+      
+      // Check expiration
+      if (decoded.exp * 1000 < Date.now()) {
+        console.log(`${type} token expired`);
+        return null;
+      }
+      
+      // Check token type for guest tokens
+      if (type === 'guest' && decoded.type !== 'guest') {
+        console.log('Invalid guest token type');
+        return null;
+      }
+      
       return decoded;
     } catch (err) {
-      return { role: 'customer' };
+      console.log(`Invalid ${type} token:`, err.message);
+      return null;
     }
-  };
+  }, []);
 
-  const fetchCartCount = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      setCartCount(0);
-      return;
+  // ✅ IMPROVED: Auth state calculation
+  const getAuthState = useCallback(() => {
+    // Check for regular user authentication first
+    if (token) {
+      const decoded = validateToken(token, 'user');
+      if (decoded) {
+        return {
+          isAuthenticated: true,
+          isGuest: false,
+          user: decoded,
+          guest: null
+        };
+      } else {
+        // Clear invalid token
+        localStorage.removeItem('token');
+      }
     }
+    
+    // Check for guest session
+    if (guestToken) {
+      const decoded = validateToken(guestToken, 'guest');
+      if (decoded) {
+        return {
+          isAuthenticated: false,
+          isGuest: true,
+          user: null,
+          guest: decoded
+        };
+      } else {
+        // Clear invalid guest token and cart
+        localStorage.removeItem('guestToken');
+        localStorage.removeItem('guestCart');
+        localStorage.removeItem('guestData');
+      }
+    }
+    
+    // No valid authentication
+    return {
+      isAuthenticated: false,
+      isGuest: false,
+      user: null,
+      guest: null
+    };
+  }, [token, guestToken, validateToken]);
 
+  // ✅ FIX: Improved fetchCartCount with better dependency management
+  const fetchCartCount = useCallback(async () => {
     try {
-      const response = await axios.get('/api/cart', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const totalItems = response.data.reduce((sum, item) => sum + item.quantity, 0);
+      let totalItems = 0;
+
+      // For authenticated users
+      if (token) {
+        const response = await axios.get('/api/cart', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        totalItems = response.data.reduce((sum, item) => sum + item.quantity, 0);
+      } 
+      // For guests
+      else if (guestToken) {
+        const guestCart = JSON.parse(localStorage.getItem('guestCart') || '[]');
+        totalItems = guestCart.reduce((sum, item) => sum + item.quantity, 0);
+      }
+
       setCartCount(totalItems);
     } catch (error) {
-      console.error('Error fetching cart:', error);
+      console.error('Error fetching cart count:', error);
       setCartCount(0);
     }
+  }, [token, guestToken]);
+
+  // ✅ FIX: Single useEffect with proper cleanup
+  useEffect(() => {
+    const initializeApp = async () => {
+      setLoading(true);
+      
+      // Set auth state
+      const state = getAuthState();
+      setAuthState(state);
+      
+      // Fetch cart count
+      await fetchCartCount();
+      
+      setLoading(false);
+    };
+
+    initializeApp();
+
+    // ✅ ADD: Listen for storage changes (for multiple tabs)
+    const handleStorageChange = (e) => {
+      if (e.key === 'token' || e.key === 'guestToken' || e.key === 'guestCart') {
+        initializeApp();
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [getAuthState, fetchCartCount]);
+
+  // ✅ FIX: Improved auth state update function
+  const updateAuthState = useCallback((newState = null) => {
+    if (newState) {
+      setAuthState(newState);
+    } else {
+      // Recalculate auth state
+      const state = getAuthState();
+      setAuthState(state);
+    }
+    fetchCartCount();
+  }, [getAuthState, fetchCartCount]);
+
+  const { isAuthenticated, isGuest, user } = authState;
+  const isAdmin = user?.role === 'admin';
+
+  // ✅ ADD: Route protection components for cleaner code
+  const ProtectedRoute = ({ children, requireAuth = false, requireAdmin = false, requireGuest = false }) => {
+    if (requireAdmin && !isAdmin) {
+      return <Navigate to="/dashboard" />;
+    }
+    
+    if (requireAuth && !isAuthenticated) {
+      return <Navigate to="/auth" />;
+    }
+    
+    if (requireGuest && !isGuest) {
+      return <Navigate to="/auth" />;
+    }
+    
+    return children;
   };
 
-  useEffect(() => {
-    fetchCartCount();
-  }, [token]);
+  const PublicOnlyRoute = ({ children }) => {
+    if (isAuthenticated) {
+      return <Navigate to="/dashboard" />;
+    }
+    if (isGuest) {
+      return <Navigate to="/guest/medications" />;
+    }
+    return children;
+  };
 
-  const user = getUserFromToken();
-  const isAuthenticated = !!token;
-  const isAdmin = user.role === 'admin';
+  // Show loading spinner during initial app load
+  if (loading) {
+    return (
+      <div className="d-flex justify-content-center align-items-center min-vh-100">
+        <div className="spinner-border text-primary" role="status">
+          <span className="visually-hidden">Loading...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="app-container">
-      <Header cartCount={cartCount} />
-      
-      <Suspense fallback={<div>Loading...</div>}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/verify-email" element={<VerifyEmail />} />
-          
-          {/* Admin routes */}
-          <Route 
-            path="/dashboard" 
-            element={isAuthenticated ? <Dashboard /> : <Navigate to="/auth" />} 
-          />
-          <Route 
-            path="/medications" 
-            element={isAuthenticated ? <MedicationsList /> : <Navigate to="/auth" />} 
-          />
-          <Route 
-            path="/medications/add" 
-            element={isAuthenticated && isAdmin ? <AddMedication /> : <Navigate to="/medications" />} 
-          />
-          <Route 
-            path="/medications/edit/:id" 
-            element={isAuthenticated && isAdmin ? <EditMedication /> : <Navigate to="/medications" />} 
-          />
-          <Route 
-            path="/prescriptions" 
-            element={isAuthenticated && isAdmin ? <AdminPrescriptions /> : <Navigate to="/dashboard" />} 
-          />
-          <Route
-            path="/admin/prescriptions/review/:id"
-            element={isAuthenticated && isAdmin ? <AdminPrescriptionReview /> : <Navigate to="/dashboard" />}
-          />
+    <ErrorBoundary>
+      <div className="app-container">
+        <Header 
+          cartCount={cartCount} 
+          authState={authState}
+          onAuthStateChange={updateAuthState}
+        />
+        
+        <Suspense fallback={
+          <div className="d-flex justify-content-center align-items-center min-vh-100">
+            <div className="spinner-border text-primary" role="status">
+              <span className="visually-hidden">Loading...</span>
+            </div>
+          </div>
+        }>
+          <Routes>
+            {/* Public routes */}
+            <Route path="/" element={<Home />} />
+            <Route 
+              path="/auth" 
+              element={
+                <PublicOnlyRoute>
+                  <Auth />
+                </PublicOnlyRoute>
+              } 
+            />
+            <Route path="/verify-email" element={<VerifyEmail />} />
+            <Route path="/order-status" element={<OrderStatusCheck />} />
+            <Route 
+  path="/order-confirmation" 
+  element={<OrderConfirmation onCartUpdate={fetchCartCount} />} 
+/>
+            
+            {/* Guest routes */}
+            <Route 
+              path="/guest/medications" 
+              element={
+                <ProtectedRoute requireGuest>
+                  <GuestMedications onCartUpdate={fetchCartCount} />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/guest/checkout" 
+              element={
+                <ProtectedRoute requireGuest>
+                  <GuestCheckout onCartUpdate={fetchCartCount} />
+                </ProtectedRoute>
+              } 
+            />
 
-          {/* Customer routes */}
-          <Route 
-            path="/customer/medications" 
-            element={
-              isAuthenticated ? 
-              <CustomerMedications onCartUpdate={fetchCartCount} /> : 
-              <Navigate to="/auth" />
-            } 
-          />
-          
-          <Route 
-            path="/upload-prescription/:id" 
-            element={isAuthenticated ? <UploadPrescription /> : <Navigate to="/auth" />} 
-          />
+            {/* Admin routes */}
+            <Route 
+              path="/admin/dashboard" 
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminDashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/dashboard" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <Dashboard />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/medications" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <MedicationsList />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/medications/add" 
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AddMedication />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/medications/edit/:id" 
+              element={
+                <ProtectedRoute requireAdmin>
+                  <EditMedication />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/prescriptions" 
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminPrescriptions />
+                </ProtectedRoute>
+              } 
+            />
+            <Route
+              path="/admin/prescriptions/review/:id"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <AdminPrescriptionReview />
+                </ProtectedRoute>
+              }
+            />
 
-          <Route 
-            path="/cart" 
-            element={
-              isAuthenticated ? 
-              <CartPage onCartUpdate={fetchCartCount} /> : 
-              <Navigate to="/auth" />
-            } 
-          />
+            {/* Customer routes */}
+            <Route 
+              path="/customer/medications" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <CustomerMedications onCartUpdate={fetchCartCount} />
+                </ProtectedRoute>
+              } 
+            />
+            
+            <Route 
+              path="/upload-prescription/:id" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <UploadPrescription />
+                </ProtectedRoute>
+              } 
+            />
 
-          {/* My Prescriptions */}
-          <Route 
-            path="/my-prescriptions" 
-            element={isAuthenticated ? <MyPrescriptions /> : <Navigate to="/auth" />} 
-          />
+            <Route 
+              path="/cart" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <CartPage onCartUpdate={fetchCartCount} />
+                </ProtectedRoute>
+              } 
+            />
 
-          {/* Catch all */}
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </Suspense>
-    </div>
+            {/* My Prescriptions */}
+            <Route 
+              path="/my-prescriptions" 
+              element={
+                <ProtectedRoute requireAuth>
+                  <MyPrescriptions />
+                </ProtectedRoute>
+              } 
+            />
+
+            {/* Smart redirects */}
+            <Route 
+              path="/medications" 
+              element={
+                isAuthenticated ? 
+                  <Navigate to="/customer/medications" /> :
+                isGuest ? 
+                  <Navigate to="/guest/medications" /> :
+                  <Navigate to="/auth" />
+              } 
+            />
+
+            {/* Catch all */}
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </Suspense>
+      </div>
+    </ErrorBoundary>
   );
 }
 
