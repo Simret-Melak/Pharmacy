@@ -5,10 +5,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Correct relative path - go up one level from controllers, then into uploads/medications
+
 const uploadDir = path.join(__dirname, '../uploads/medications');
 
-// Create directory if it doesn't exist
+
 try {
   if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
@@ -16,7 +16,6 @@ try {
   }
 } catch (error) {
   console.error('Error creating upload directory:', error);
-  // Handle error appropriately
 }
 const medicationUpload = multer({
   storage: multer.diskStorage({
@@ -112,55 +111,108 @@ exports.addMedication = async (req, res) => {
 
 exports.getMedications = async (req, res) => {
   try {
-    let query = `SELECT 
-                  m.id, 
-                  m.name, 
-                  m.category, 
-                  m.dosage, 
-                  m.price::float, 
-                  m.description, 
-                  m.stock_quantity,
-                  m.image_url,
-                  m.is_prescription_required,
-                  p.name as pharmacy_name
-                FROM medications m
-                LEFT JOIN pharmacies p ON m.pharmacy_id = p.id`;
-    
-    const params = [];
-    let paramCount = 1;
+    const {
+      page = 1,
+      limit = 10,
+      search = '',
+      category = '',
+      requires_prescription,
+      pharmacy_id
+    } = req.query;
 
-    // Different access for different roles
-    if (req.user.role === 'pharmacist' && req.user.pharmacy_id) {
-      query += ` WHERE m.pharmacy_id = $${paramCount}`;
-      params.push(req.user.pharmacy_id);
-      paramCount++;
-    } 
-    else if (req.user.role === 'customer') {
-      query += ` WHERE m.stock_quantity > 0`; // Only show in-stock items to customers
+    const offset = (page - 1) * limit;
+
+    // ✅ FIX: Check if user exists before accessing role
+    const userRole = req.user ? req.user.role : 'guest';
+
+    // Build WHERE conditions for SQL
+    let whereConditions = [];
+    let queryParams = [];
+    let paramCount = 0;
+
+    // Base query
+    let baseQuery = `
+      SELECT 
+        id, name, description, price::float, stock_quantity,
+        dosage, category, is_prescription_required, image_url,
+        pharmacy_id, online_stock, in_person_stock,
+        created_at, updated_at
+      FROM medications
+    `;
+
+    // Count query
+    let countQuery = `SELECT COUNT(*) FROM medications`;
+
+    // Add conditions for non-admin users (including guests)
+    if (userRole !== 'admin') {
+      whereConditions.push(`stock_quantity > 0`);
     }
 
-    // Add search capability if query parameter exists
-    if (req.query.search) {
-      const searchTerm = `%${req.query.search}%`;
-      query += paramCount === 1 ? ' WHERE' : ' AND';
-      query += ` (m.name ILIKE $${paramCount} OR m.category ILIKE $${paramCount})`;
-      params.push(searchTerm);
+    // Add search condition
+    if (search) {
       paramCount++;
+      whereConditions.push(`(name ILIKE $${paramCount} OR description ILIKE $${paramCount})`);
+      queryParams.push(`%${search}%`);
     }
 
-    query += ' ORDER BY m.name ASC';
-    const result = await pool.query(query, params);
+    // Add category condition
+    if (category) {
+      paramCount++;
+      whereConditions.push(`category = $${paramCount}`);
+      queryParams.push(category);
+    }
+
+    // Add prescription requirement condition
+    if (requires_prescription !== undefined) {
+      paramCount++;
+      whereConditions.push(`is_prescription_required = $${paramCount}`);
+      queryParams.push(requires_prescription === 'true');
+    }
+
+    // Add pharmacy_id condition
+    if (pharmacy_id) {
+      paramCount++;
+      whereConditions.push(`pharmacy_id = $${paramCount}`);
+      queryParams.push(pharmacy_id);
+    }
+
+    // Add WHERE clause if conditions exist
+    if (whereConditions.length > 0) {
+      const whereClause = ` WHERE ${whereConditions.join(' AND ')}`;
+      baseQuery += whereClause;
+      countQuery += whereClause;
+    }
+
+    // Add ordering and pagination
+    baseQuery += ` ORDER BY name ASC LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}`;
+    queryParams.push(parseInt(limit), parseInt(offset));
+
+    // Execute queries
+    const medicationsResult = await pool.query(baseQuery, queryParams);
     
-    res.status(200).json(result.rows);
+    // For count, we need to remove the pagination params
+    const countParams = queryParams.slice(0, paramCount);
+    const countResult = await pool.query(countQuery, countParams);
+    
+    const totalCount = parseInt(countResult.rows[0].count);
+
+    res.json({
+      success: true,
+      medications: medicationsResult.rows,
+      totalCount: totalCount,
+      currentPage: parseInt(page),
+      totalPages: Math.ceil(totalCount / limit)
+    });
+
   } catch (error) {
     console.error('Database error:', error);
-    res.status(500).json({ 
-      message: 'Failed to fetch medications',
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching medications',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
-
 exports.updateMedication = async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {

@@ -69,6 +69,16 @@ CREATE TABLE IF NOT EXISTS cart_items (
 CREATE TABLE IF NOT EXISTS orders (
     id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id),
+
+     -- For guest orders (nullable for users)
+    confirmation_code VARCHAR(50) UNIQUE,
+    customer_name VARCHAR(255),
+    customer_phone VARCHAR(50),
+    customer_email VARCHAR(255),
+    customer_notes TEXT,
+    is_guest_order BOOLEAN DEFAULT FALSE,
+
+    
     pharmacy_id INTEGER REFERENCES pharmacies(id), 
     total_price DECIMAL(10, 2),
     total_number_of_items INT DEFAULT 0,
@@ -92,17 +102,21 @@ CREATE TABLE IF NOT EXISTS order_items (
 -- 8. Prescriptions Table
 CREATE TABLE IF NOT EXISTS prescriptions (
     id SERIAL PRIMARY KEY,
+    -- Can belong to user or order (for guests)
     user_id INTEGER REFERENCES users(id),
+    order_id INTEGER REFERENCES orders(id),
+
     medication_id INTEGER REFERENCES medications(id),
     pharmacist_id INTEGER REFERENCES users(id), -- Who approved/rejected
     status VARCHAR(50) DEFAULT 'pending', -- 'approved', 'rejected'
     notes TEXT, -- Reason for rejection
     expiry_date TIMESTAMP,
     file_path TEXT,
+    file_name VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-
+ 
 -- 9. Payment Transactions Table 
 CREATE TABLE IF NOT EXISTS payment_transactions (
     id SERIAL PRIMARY KEY,
@@ -129,19 +143,4 @@ CREATE TABLE IF NOT EXISTS sales_reports (
     total_revenue DECIMAL(10, 2) DEFAULT 0,
     top_selling_products JSONB, -- {product_id, name, quantity_sold, revenue}
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- 11. User Prescriptions Table (Stores user prescription history)
-CREATE TABLE IF NOT EXISTS user_prescriptions (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    medication_id INTEGER REFERENCES medications(id),
-    prescription_data JSONB, -- Stores prescription details
-    status VARCHAR(50) DEFAULT 'active',
-    issued_date TIMESTAMP,
-    expiry_date TIMESTAMP,
-    prescribing_doctor VARCHAR(255),
-    file_path TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

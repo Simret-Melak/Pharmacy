@@ -21,39 +21,40 @@ router.post(
   prescriptionController.uploadPrescription
 );
 
-// Get user's own prescriptions - MUST COME FIRST
-router.get('/prescriptions/my', prescriptionController.getMyPrescriptions);
+// Get user's own prescriptions - REGULAR USERS ONLY
+router.get('/my', prescriptionController.getMyPrescriptions);
 
+// === ADMIN ROUTES === //
 // Get all prescriptions (admin only)
 router.get(
-  '/prescriptions/all',
+  '/all',
   checkAdmin,
   prescriptionController.getAllPrescriptions
 );
 
-// File operations
+// Get specific prescription details (admin only)
 router.get(
-  '/prescriptions/file/:id/view',
-  prescriptionController.viewPrescriptionFile
-);
-
-router.get(
-  '/prescriptions/file/:id/download',
-  prescriptionController.downloadPrescription
-);
-
-// Get specific prescription details
-router.get(
-  '/prescriptions/:id',
+  '/:id',
   checkAdmin,
   prescriptionController.getPrescriptionDetails
 );
 
-// Update prescription status
+// Update prescription status (admin only)
 router.put(
-  '/prescriptions/:id/status',
+  '/:id/status',
   checkAdmin,
   prescriptionController.updatePrescriptionStatus
+);
+
+// File operations (both user and admin, with proper auth in controller)
+router.get(
+  '/file/:id/view',
+  prescriptionController.viewPrescriptionFile
+);
+
+router.get(
+  '/file/:id/download',
+  prescriptionController.downloadPrescription
 );
 
 module.exports = router;
