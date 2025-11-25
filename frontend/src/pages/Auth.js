@@ -5,6 +5,35 @@ import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, User, Phone, ShoppingCart } from 'lucide-react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
+// Axios interceptor for authentication
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Response interceptor to handle token errors
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 403 && error.response?.data?.message === 'Invalid or expired token') {
+      // Clear invalid token and redirect to login
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      localStorage.removeItem('refreshToken');
+      window.location.href = '/auth?message=Session expired. Please login again.';
+    }
+    return Promise.reject(error);
+  }
+);
+
 export default function Auth() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('login');
@@ -16,179 +45,178 @@ export default function Auth() {
 
   const [formData, setFormData] = useState({
     login: { email: '', password: '' },
-    register: { firstName: '', lastName: '', email: '', password: '', confirmPassword: '' },
-    guest: { name: '', phone: '', email: '' } // ✅ ADD GUEST FORM DATA
+    register: { 
+      firstName: '', 
+      lastName: '', 
+      email: '', 
+      password: '', 
+      confirmPassword: '',
+      phone: '' 
+    },
+    guest: { name: '', phone: '', email: '' }
   });
 
-  // In your frontend Auth.js - update the guest checkout function
-// In your Auth.js - update handleGuestCheckout
-const handleGuestCheckout = async (e) => {
-  e.preventDefault();
-  setApiError('');
-  setLoading(true);
+  // Guest checkout function
+  const handleGuestCheckout = async (e) => {
+    e.preventDefault();
+    setApiError('');
+    setLoading(true);
 
-  const { name, phone, email } = formData.guest;
-  
-  // Basic validation
-  if (!name || !phone) {
-    setApiError('Name and phone number are required for guest checkout');
-    setLoading(false);
-    return;
-  }
-
-  try {
-    console.log('🔄 Starting guest checkout...');
+    const { name, phone, email } = formData.guest;
     
-    const { data } = await axios.post('/api/guest/initiate', {
-      name: name.trim(),
-      phone: phone.replace(/\D/g, ''),
-      email: email.trim() || null
-    });
+    if (!name || !phone) {
+      setApiError('Name and phone number are required for guest checkout');
+      setLoading(false);
+      return;
+    }
 
-    console.log('✅ Guest session created:', data);
-
-    // Save guest token and data
-    localStorage.setItem('guestToken', data.guestToken);
-    localStorage.setItem('guestData', JSON.stringify(data.guestData));
-    
-    // Navigate to medications page
-    navigate('/guest/medications', { 
-      state: { 
-        message: 'Guest session started! You can now browse and order.',
-        isGuest: true 
-      }
-    });
-
-  } catch (err) {
-    console.log('Guest checkout error:', err.response?.data);
-    
-    // ✅ HANDLE EMAIL ALREADY REGISTERED CASE
-    if (err.response?.data?.code === 'EMAIL_ALREADY_REGISTERED') {
-      setApiError(err.response.data.message);
-      setSuccessMessage('Please login with your existing account.');
-      setActiveTab('login'); // Switch to login tab
+    try {
+      console.log('🔄 Starting guest checkout...');
       
-      // Pre-fill the login form with the email
-      setFormData({
-        ...formData,
-        login: {
-          ...formData.login,
-          email: formData.guest.email // Auto-fill the email from guest form
-        },
-        guest: {
-          ...formData.guest,
-          email: '' // Clear the email from guest form
+      const { data } = await axios.post('/api/auth/guest/initiate', {
+        name: name.trim(),
+        phone: phone.replace(/\D/g, ''),
+        email: email.trim() || null
+      });
+
+      console.log('✅ Guest session created:', data);
+
+      localStorage.setItem('guestToken', data.guestToken);
+      localStorage.setItem('guestData', JSON.stringify(data.guestData));
+      
+      navigate('/guest/medications', { 
+        state: { 
+          message: 'Guest session started! You can now browse and order.',
+          isGuest: true 
         }
       });
-    } else {
-      setApiError(err.response?.data?.message || 'Failed to start guest session');
+
+    } catch (err) {
+      console.log('Guest checkout error:', err.response?.data);
+      
+      if (err.response?.data?.code === 'EMAIL_ALREADY_REGISTERED') {
+        setApiError(err.response.data.message);
+        setSuccessMessage('Please login with your existing account.');
+        setActiveTab('login');
+        
+        setFormData({
+          ...formData,
+          login: {
+            ...formData.login,
+            email: formData.guest.email
+          },
+          guest: {
+            ...formData.guest,
+            email: ''
+          }
+        });
+      } else {
+        setApiError(err.response?.data?.message || 'Failed to start guest session');
+      }
+    } finally {
+      setLoading(false);
     }
-  } finally {
-    setLoading(false);
-  }
-};
-  // ✅ UPDATE: Handle login success with guest session cleanup
+  };
+
+  // Handle login/registration
   const handleSubmit = async (type, e) => {
-  e.preventDefault();
-  setApiError('');
-  setSuccessMessage('');
-  setLoading(true);
+    e.preventDefault();
+    setApiError('');
+    setSuccessMessage('');
+    setLoading(true);
 
-  console.log('🔄 Starting auth process for:', type);
-  console.log('📧 Email being used:', formData[type].email);
+    console.log('🔄 Starting auth process for:', type);
 
-  // Validate form
-  if (!validate(type)) {
-    console.log('❌ Form validation failed');
-    setLoading(false);
-    return;
-  }
-  
-  try {
-    const endpoint = type === 'login' ? 'login' : 'register';
-    
-    // Prepare request data
-    let requestData;
-    if (type === 'register') {
-      requestData = {
-        email: formData.register.email.trim(),
-        password: formData.register.password,
-        username: formData.register.email.trim(),
-        full_name: `${formData.register.firstName.trim()} ${formData.register.lastName.trim()}`
-      };
-    } else {
-      requestData = {
-        email: formData.login.email.trim(),
-        password: formData.login.password
-      };
+    // Validate form
+    if (!validate(type)) {
+      console.log('❌ Form validation failed');
+      setLoading(false);
+      return;
     }
     
-    console.log('📤 Sending request to:', `/api/auth/${endpoint}`);
-    console.log('📦 Request data:', { ...requestData, password: '***' }); // Hide password in logs
-    
-    // Make API call
-    const response = await axios.post(`/api/auth/${endpoint}`, requestData, {
-      timeout: 10000, // 10 second timeout
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    
-    console.log('✅ API Response received:', {
-      status: response.status,
-      data: response.data,
-      hasToken: !!response.data.token,
-      hasUser: !!response.data.user
-    });
-    
-    // ✅ CLEAR GUEST SESSION IF EXISTS
-    if (response.data.clearGuestSession) {
-      localStorage.removeItem('guestToken');
-      localStorage.removeItem('guestData');
-      localStorage.removeItem('guestCart');
-      console.log('🧹 Cleared guest session during login/registration');
-    }
-    
-    if (type === 'login') {
-      console.log('🔐 Processing login success...');
+    try {
+      const endpoint = type === 'login' ? 'login' : 'register';
       
-      // Store authentication data
-      if (response.data.token) {
-        localStorage.setItem('token', response.data.token);
-        console.log('✅ Token stored in localStorage');
+      // Prepare request data - MATCHING BACKEND EXPECTATIONS
+      let requestData;
+      if (type === 'register') {
+        requestData = {
+          email: formData.register.email.trim(),
+          password: formData.register.password,
+          username: formData.register.email.trim(),
+          full_name: `${formData.register.firstName.trim()} ${formData.register.lastName.trim()}`,
+          phone: formData.register.phone || ''
+        };
+      } else {
+        requestData = {
+          email: formData.login.email.trim(),
+          password: formData.login.password
+        };
       }
       
-      if (response.data.user) {
-        localStorage.setItem('user', JSON.stringify(response.data.user));
-        console.log('✅ User data stored in localStorage');
+      console.log('📤 Sending request to:', `/api/auth/${endpoint}`);
+      console.log('📦 Request data:', requestData);
+      
+      const response = await axios.post(`/api/auth/${endpoint}`, requestData, {
+        timeout: 10000,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      console.log('✅ API Response received:', {
+        status: response.status,
+        data: response.data
+      });
+      
+      // Clear guest session if exists
+      if (response.data.clearGuestSession) {
+        localStorage.removeItem('guestToken');
+        localStorage.removeItem('guestData');
+        localStorage.removeItem('guestCart');
+        console.log('🧹 Cleared guest session during login/registration');
       }
       
-      // Verify storage worked
-      const storedToken = localStorage.getItem('token');
-      const storedUser = localStorage.getItem('user');
-      
-      console.log('📋 Verification - Token in localStorage:', !!storedToken);
-      console.log('👤 Verification - User in localStorage:', !!storedUser);
-      
-      if (!storedToken) {
-        throw new Error('Failed to store authentication token');
-      }
-      
-      // Determine where to navigate
-      let redirectPath = '/medications'; // Default path
-      
-      // Role-based redirection (if you have different user roles)
-      if (response.data.user?.role === 'admin') {
-        redirectPath = '/admin/dashboard';
-      } else if (response.data.user?.role === 'pharmacist') {
-        redirectPath = '/pharmacist/dashboard';
-      }
-      
-      console.log('🧭 Navigating to:', redirectPath);
-      
-      // Small delay to ensure state updates and storage is complete
-      setTimeout(() => {
-        console.log('🚀 Executing navigation...');
+      if (type === 'login') {
+        console.log('🔐 Processing login success...');
+        
+        // Store authentication data
+        if (response.data.token) {
+          localStorage.setItem('token', response.data.token);
+          console.log('✅ Token stored in localStorage');
+        }
+        
+        if (response.data.user) {
+          localStorage.setItem('user', JSON.stringify(response.data.user));
+          console.log('✅ User data stored in localStorage');
+        }
+
+        if (response.data.refreshToken) {
+          localStorage.setItem('refreshToken', response.data.refreshToken);
+        }
+        
+        // Verify storage worked
+        const storedToken = localStorage.getItem('token');
+        const storedUser = localStorage.getItem('user');
+        
+        console.log('📋 Verification - Token in localStorage:', !!storedToken);
+        console.log('👤 Verification - User in localStorage:', !!storedUser);
+        
+        if (!storedToken) {
+          throw new Error('Failed to store authentication token');
+        }
+        
+        // Determine where to navigate based on user role
+        let redirectPath = '/medications';
+        
+        if (response.data.user?.role === 'admin') {
+          redirectPath = '/admin/dashboard';
+        } else if (response.data.user?.role === 'pharmacist') {
+          redirectPath = '/pharmacist/dashboard';
+        }
+        
+        console.log('🧭 Navigating to:', redirectPath);
+        
         navigate(redirectPath, { 
           replace: true,
           state: { 
@@ -197,139 +225,118 @@ const handleGuestCheckout = async (e) => {
           }
         });
         
-        // Force reload if navigation seems stuck (fallback)
-        setTimeout(() => {
-          if (window.location.pathname === '/auth') {
-            console.log('⚠️ Navigation might be stuck, forcing reload...');
-            window.location.href = redirectPath;
-          }
-        }, 1000);
+      } else {
+        // Registration success
+        console.log('✅ Registration successful');
+        setSuccessMessage('Registration successful! You can now login.');
+        setActiveTab('login');
         
-      }, 50);
+        // Clear registration form
+        setFormData(prev => ({
+          ...prev,
+          register: { 
+            firstName: '', 
+            lastName: '', 
+            email: '', 
+            password: '', 
+            confirmPassword: '',
+            phone: ''
+          },
+          login: {
+            ...prev.login,
+            email: requestData.email
+          }
+        }));
+      }
       
-    } else {
-      // Registration success
-      console.log('✅ Registration successful');
-      setSuccessMessage('Registration successful! Please check your email to verify your account.');
-      setActiveTab('login');
-      
-      // Clear registration form
-      setFormData({
-        ...formData,
-        register: { 
-          firstName: '', 
-          lastName: '', 
-          email: '', 
-          password: '', 
-          confirmPassword: '' 
-        }
+    } catch (err) {
+      console.log('❌ Auth error details:', {
+        name: err.name,
+        message: err.message,
+        response: err.response?.data,
+        status: err.response?.status,
+        code: err.code
       });
       
-      // Pre-fill login email for convenience
-      setFormData(prev => ({
-        ...prev,
-        login: {
-          ...prev.login,
-          email: requestData.email
-        }
-      }));
+      if (err.code === 'NETWORK_ERROR' || err.code === 'ECONNABORTED') {
+        setApiError('Network error. Please check your connection and try again.');
+      } 
+      else if (err.response?.status === 401) {
+        setApiError('Invalid email or password. Please try again.');
+      } 
+      else if (err.response?.status === 400) {
+        setApiError(err.response.data.message || 'Please check your input and try again.');
+      }
+      else if (err.response?.status === 409) {
+        setApiError(err.response.data.message || 'An account with this email already exists.');
+      }
+      else if (err.response?.status === 500) {
+        setApiError('Server error. Please try again later.');
+      }
+      else {
+        setApiError(err.response?.data?.message || 'An unexpected error occurred. Please try again.');
+      }
+      
+      // Clear sensitive data on error
+      if (type === 'login') {
+        setFormData(prev => ({
+          ...prev,
+          login: {
+            ...prev.login,
+            password: ''
+          }
+        }));
+      }
+      
+    } finally {
+      setLoading(false);
+      console.log('🏁 Auth process completed');
     }
-    
-  } catch (err) {
-    console.log('❌ Auth error details:', {
-      name: err.name,
-      message: err.message,
-      response: err.response?.data,
-      status: err.response?.status,
-      code: err.code
-    });
-    
-    // Handle specific error cases
-    if (err.code === 'NETWORK_ERROR' || err.code === 'ECONNABORTED') {
-      setApiError('Network error. Please check your connection and try again.');
-    } 
-    else if (err.response?.data?.code === 'EMAIL_NOT_VERIFIED') {
-      setApiError(err.response.data.message);
-      setSuccessMessage('A new verification email has been sent. Please check your inbox.');
-    } 
-    else if (err.response?.status === 401) {
-      setApiError('Invalid email or password. Please try again.');
-    } 
-    else if (err.response?.status === 400) {
-      setApiError(err.response.data.message || 'Please check your input and try again.');
-    }
-    else if (err.response?.status === 403) {
-      setApiError(err.response.data.message || 'Access denied. Please verify your account.');
-    }
-    else if (err.response?.status === 409) {
-      setApiError(err.response.data.message || 'An account with this email already exists.');
-    }
-    else if (err.response?.status === 500) {
-      setApiError('Server error. Please try again later.');
-    }
-    else {
-      setApiError(err.response?.data?.message || 'An unexpected error occurred. Please try again.');
-    }
-    
-    // Clear sensitive data on error
-    if (type === 'login') {
-      setFormData(prev => ({
-        ...prev,
-        login: {
-          ...prev.login,
-          password: ''
-        }
-      }));
-    }
-    
-  } finally {
-    setLoading(false);
-    console.log('🏁 Auth process completed');
-  }
-};
-  const validate = (type) => {
-  const newErrors = {};
-  const data = formData[type];
-  
-  // Email validation
-  if (!data.email?.trim()) {
-    newErrors.email = 'Email is required';
-  } else if (!/^\S+@\S+\.\S+$/.test(data.email.trim())) {
-    newErrors.email = 'Invalid email format';
-  }
-  
-  // Password validation
-  if (!data.password) {
-    newErrors.password = 'Password is required';
-  } else if (data.password.length < 8) {
-    newErrors.password = 'Password must be at least 8 characters';
-  }
-  
-  // Registration-specific validations
-  if (type === 'register') {
-    if (!data.firstName?.trim()) {
-      newErrors.firstName = 'First name is required';
-    }
-    if (!data.lastName?.trim()) {
-      newErrors.lastName = 'Last name is required';
-    }
-    if (data.password !== data.confirmPassword) {
-      newErrors.confirmPassword = 'Passwords do not match';
-    }
-  }
-  
-  setErrors(newErrors);
-  
-  if (Object.keys(newErrors).length > 0) {
-    console.log('❌ Validation errors:', newErrors);
-    return false;
-  }
-  
-  console.log('✅ Form validation passed');
-  return true;
-};
+  };
 
-  // ✅ ADD: Check for existing guest session on component mount
+  const validate = (type) => {
+    const newErrors = {};
+    const data = formData[type];
+    
+    // Email validation
+    if (!data.email?.trim()) {
+      newErrors.email = 'Email is required';
+    } else if (!/^\S+@\S+\.\S+$/.test(data.email.trim())) {
+      newErrors.email = 'Invalid email format';
+    }
+    
+    // Password validation
+    if (!data.password) {
+      newErrors.password = 'Password is required';
+    } else if (data.password.length < 8) {
+      newErrors.password = 'Password must be at least 8 characters';
+    }
+    
+    // Registration-specific validations
+    if (type === 'register') {
+      if (!data.firstName?.trim()) {
+        newErrors.firstName = 'First name is required';
+      }
+      if (!data.lastName?.trim()) {
+        newErrors.lastName = 'Last name is required';
+      }
+      if (data.password !== data.confirmPassword) {
+        newErrors.confirmPassword = 'Passwords do not match';
+      }
+    }
+    
+    setErrors(newErrors);
+    
+    if (Object.keys(newErrors).length > 0) {
+      console.log('❌ Validation errors:', newErrors);
+      return false;
+    }
+    
+    console.log('✅ Form validation passed');
+    return true;
+  };
+
+  // Check for existing guest session on component mount
   useEffect(() => {
     const guestToken = localStorage.getItem('guestToken');
     if (guestToken) {
@@ -340,6 +347,7 @@ const handleGuestCheckout = async (e) => {
   useEffect(() => {
     setErrors({});
     setApiError('');
+    setSuccessMessage('');
   }, [activeTab]);
 
   return (
@@ -380,7 +388,7 @@ const handleGuestCheckout = async (e) => {
             className="bg-white shadow-lg p-4 p-md-5 rounded-lg"
             key="formContainer"
           >
-            {/* ✅ ADD: Guest Checkout Section */}
+            {/* Guest Checkout Section */}
             <div className="text-center mb-4 pb-4 border-bottom">
               <div className="mb-3">
                 <ShoppingCart size={32} className="text-primary mb-2" />
@@ -630,6 +638,7 @@ const handleGuestCheckout = async (e) => {
                           register: { ...formData.register, lastName: e.target.value }
                         })}
                         className={`form-control ${errors.lastName ? 'is-invalid' : ''}`}
+                        required
                       />
                       {errors.lastName && <div className="invalid-feedback">{errors.lastName}</div>}
                     </div>
@@ -656,6 +665,29 @@ const handleGuestCheckout = async (e) => {
                           required
                         />
                         {errors.email && <div className="invalid-feedback">{errors.email}</div>}
+                      </div>
+                    </div>
+
+                    {/* Phone Field */}
+                    <div className="form-group">
+                      <label htmlFor="register-phone" className="text-gray-700 font-medium">
+                        Phone Number (Optional)
+                      </label>
+                      <div className="input-group">
+                        <div className="input-group-prepend">
+                          <span className="input-group-text"><Phone size={18} /></span>
+                        </div>
+                        <input
+                          id="register-phone"
+                          type="tel"
+                          placeholder="Enter your phone number"
+                          value={formData.register.phone}
+                          onChange={(e) => setFormData({
+                            ...formData,
+                            register: { ...formData.register, phone: e.target.value }
+                          })}
+                          className="form-control"
+                        />
                       </div>
                     </div>
 
@@ -732,7 +764,7 @@ const handleGuestCheckout = async (e) => {
               </AnimatePresence>
             </div>
 
-            {/* ✅ ADD: Order Status Check Link */}
+            {/* Order Status Check Link */}
             <div className="text-center mt-4 pt-3 border-top">
               <small className="text-muted">
                 Already have a confirmation code?{' '}
