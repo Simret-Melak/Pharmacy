@@ -1,16 +1,100 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const crypto = require('node:crypto');
+
+const { createClient } = require('@supabase/supabase-js');
 const pool = require('../db');
-const { sendVerificationEmail } = require('../utils/emailSender');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 
-// Validate configuration
-if (!process.env.JWT_SECRET) {
-  throw new Error('JWT_SECRET is not configured');
-}
+// Initialize Supabase client
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY 
+);
 
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ message: 'Access token required' });
+  }
+
+  try {
+    // Verify using Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      console.error('Supabase token verification failed:', error);
+      return res.status(403).json({ message: 'Invalid or expired token' });
+    }
+
+    console.log('🔐 Authenticating user:', user.email);
+
+    // Get user role SOLELY from clients table
+    let userRole = 'user'; // Default for all users
+    
+    const { data: clientData, error: clientError } = await supabase
+      .from('clients')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+
+      console.log('🔍 Client data fetched for role:', clientData, clientError);
+
+    if (clientError) {
+      console.log('ℹ️ No client record found, using default role: user');
+    } else if (clientData && clientData.role) {
+      userRole = clientData.role;
+      console.log('✅ User role from clients table:', userRole);
+    }
+
+    req.user = {
+      userId: user.id,
+      email: user.email,
+      ...user.user_metadata,
+      role: userRole
+      
+    };
+    
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error);
+    return res.status(403).json({ message: 'Invalid or expired token' });
+  }
+};
+
+// Role-specific middleware
+const requireAdmin = (req, res, next) => {
+  console.log('🔐 requireAdmin - User object:', {
+    email: req.user.email,
+    role: req.user.role,
+    userId: req.user.userId,
+    roleType: typeof req.user.role,
+    roleLength: req.user.role?.length
+  });
+  
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ message: 'Admin access required' });
+  }
+  next();
+};
+
+const requirePharmacist = (req, res, next) => {
+  if (req.user.role !== 'pharmacist') {
+    return res.status(403).json({ message: 'Pharmacist access required' });
+  }
+  next();
+};
+
+const requireAdminOrPharmacist = (req, res, next) => {
+  if (req.user.role !== 'admin' && req.user.role !== 'pharmacist') {
+    return res.status(403).json({ message: 'Admin or pharmacist access required' });
+  }
+  next();
+};
+
+// Register User
 exports.registerUser = async (req, res) => {
-  const { email, password, username, full_name } = req.body;
+  const { email, password, username, full_name, phone } = req.body;
 
   try {
     // Input validation
@@ -21,181 +105,104 @@ exports.registerUser = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 8 characters' });
     }
 
-    // Check if email exists
-    const existingUser = await pool.query(
-      'SELECT * FROM users WHERE email = $1', 
-      [email]
-    );
+    // Use Supabase Auth for registration
+    const { data, error } = await supabase.auth.signUp({
+      email: email,
+      password: password,
+      options: {
+        data: {
+          username: username,
+          full_name: full_name,
+          phone: phone
+        }
+      }
+    });
 
-    // Case 1: Email exists AND is verified
-    if (existingUser.rows.length > 0 && existingUser.rows[0].is_verified) {
-      return res.status(400).json({ message: 'Email already in use' });
+    if (error) {
+      console.error('Supabase signup error:', error);
+      
+      if (error.message.includes('already registered')) {
+        return res.status(400).json({ message: 'Email already in use' });
+      }
+      
+      return res.status(400).json({ message: error.message });
     }
 
-    // Case 2: Email exists BUT NOT verified → update existing record
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    if (existingUser.rows.length > 0) {
-      await pool.query(
-        `UPDATE users SET 
-          password = $1,
-          username = $2,
-          full_name = $3,
-          verification_token = $4,
-          verification_token_expires = $5,
-          updated_at = NOW()
-         WHERE email = $6`,
-        [hashedPassword, username, full_name, verificationToken, verificationTokenExpires, email]
-      );
-    } else {
-      // Create new user
-      await pool.query(
-        `INSERT INTO users (
-          email, password, username, full_name, 
-          verification_token, verification_token_expires
-        ) VALUES ($1, $2, $3, $4, $5, $6)`,
-        [email, hashedPassword, username, full_name, verificationToken, verificationTokenExpires]
-      );
-    }
-
-    // Send verification email
-    await sendVerificationEmail(email, verificationToken);
+    console.log('✅ User registered with Supabase Auth');
 
     res.status(201).json({ 
-      message: 'Verification email sent. Please check your inbox.',
-      email: email
+      message: 'Registration successful! You can now login.',
+      email: email,
+      user: {
+        id: data.user?.id,
+        email: data.user?.email,
+        full_name: full_name,
+        phone: phone,
+        username: username
+        // No role in response - frontend will get it from protected endpoints
+      }
     });
 
   } catch (error) {
-    if (error.code === '23505') {
-      return res.status(400).json({ message: 'Username already exists' });
-    }
     console.error('Registration error:', error);
     res.status(500).json({ message: 'Registration failed. Please try again.' });
   }
 };
-exports.verifyEmail = async (req, res) => {
-  console.log('HEYYYYYY SIMRET, VERIFY EMAIL CALLED');
-  const { token, redirect } = req.query;
 
-  if (!token) {
-    console.log('Missing verification token');
-    return res.status(400).json({
-      success: false,
-      message: 'Verification token is required',
-      code: 'MISSING_TOKEN'
-    });  
-  }
-
-  try {
-    // Verify token exists and isn't expired
-    const result = await pool.query(
-      `UPDATE users 
-       SET 
-         is_verified = TRUE,
-         verification_token = NULL,
-         verification_token_expires = NULL,
-         updated_at = NOW()
-       WHERE verification_token = $1
-       AND verification_token_expires > NOW()
-       RETURNING id, email`,
-      [token]
-    );
-    console.log('found the user and updated it', result.rows);
-    if (result.rows.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired verification token',
-        code: 'INVALID_TOKEN'
-      });
-    }
-
-    const user = result.rows[0];
-    console.log(`User ${user.email} verified successfully`);
-    // Successful verification
-    res.status(200).json({
-      success: true,
-      message: 'Email verified successfully',
-      email: user.email
-    });
-
-  } catch (error) {
-    console.error('Verification error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error during verification',
-      code: 'SERVER_ERROR'
-    });
-  }
-};
-
-// loginUser function:
+// Login User
 exports.loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    console.log('🔐 LOGIN ATTEMPT - Full request body:', req.body);
-    console.log('🔐 LOGIN ATTEMPT - Headers:', req.headers);
-
     if (!email || !password) {
-      console.log('❌ Missing email or password');
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    
-    if (result.rows.length === 0) {
-      console.log('❌ User not found in database:', email);
-      return res.status(401).json({ message: 'Invalid credentials' });
-    }
-
-    const user = result.rows[0];
-    console.log('✅ User found:', { 
-      id: user.id, 
-      email: user.email, 
-      is_verified: user.is_verified,
-      role: user.role 
+    // Use Supabase Auth for login
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: email,
+      password: password
     });
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    console.log('🔑 Password match result:', isMatch);
-    
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+    if (error) {      
+      if (error.message.includes('Invalid login credentials')) {
+        return res.status(401).json({ message: 'Invalid credentials' });
+      }
+      
+      return res.status(401).json({ message: error.message });
     }
 
-    if (!user.is_verified) {
-      console.log('⚠️ User not verified - sending verification email');
-      // ... verification code
-    } else {
-      console.log('✅ User is verified - proceeding with login');
+    const user = data.user;
+
+    // Get user role SOLELY from clients table
+    let user_role = "user"; // Default role for all users
+
+    if (user && user.id) {
+      const { data: clientData, error: clientError } = await supabase
+        .from('clients')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      // If found in clients table, use that role (pharmacist or admin)
+      if (clientData && clientData.role) {
+        user_role = clientData.role;
+      }
     }
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        role: user.role,        
-        email: user.email,
-        pharmacyId: user.pharmacy_id
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
-    );
+    // Get user metadata from Supabase Auth
+    const userMetadata = user.user_metadata || {};
 
-    console.log('🎉 LOGIN SUCCESS - Token generated for user:', user.email);
-    
     res.status(200).json({
       message: 'Login successful',
-      token,
+      token: data.session.access_token,
+      refreshToken: data.session.refresh_token,
       user: {
         id: user.id,
-        username: user.username,
         email: user.email,
-        is_verified: user.is_verified,
-        role: user.role,        
-        pharmacy_id: user.pharmacy_id
+        full_name: userMetadata.full_name || '',
+        phone: userMetadata.phone || '',
+        role: user_role // Only from clients table
       },
       clearGuestSession: true
     });
@@ -209,218 +216,440 @@ exports.loginUser = async (req, res) => {
   }
 };
 
-exports.resendVerificationEmail = async (req, res) => {
-  const { email } = req.body;
-
+// Logout User
+exports.logoutUser = async (req, res) => {
   try {
-    // Check if user exists and isn't already verified
-    const userQuery = 'SELECT * FROM users WHERE email = $1';
-    const userResult = await pool.query(userQuery, [email]);
-
-    if (userResult.rows.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    const user = userResult.rows[0];
+    const token = req.headers['authorization']?.split(' ')[1];
     
-    if (user.is_verified) {
-      return res.status(400).json({ message: 'Email is already verified' });
+    if (!token) {
+      return res.status(400).json({ message: 'No token provided' });
     }
 
-    // Generate new token
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-    // Update user record
-    const updateQuery = `
-      UPDATE users
-      SET 
-        verification_token = $1,
-        verification_token_expires = $2
-      WHERE email = $3
-    `;
-    await pool.query(updateQuery, [verificationToken, verificationTokenExpires, email]);
-
-    // Resend email
-    await sendVerificationEmail(email, verificationToken);
-
-    res.status(200).json({ 
-      message: 'Verification email resent successfully' 
+    console.log('✅ User logged out successfully');
+    
+    res.status(200).json({
+      message: 'Logout successful',
+      clearSession: true
     });
+
   } catch (error) {
-    console.error('Resend verification error:', error);
-    res.status(500).json({ message: 'Failed to resend verification email' });
+    console.error('Logout error:', error);
+    res.status(500).json({ 
+      message: 'Logout failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
-// ✅ ADD THIS: Generate guest session token
-const generateGuestToken = (guestData) => {
-  return jwt.sign(
-    {
-      guestId: crypto.randomBytes(16).toString('hex'),
-      type: 'guest',
-      name: guestData.name,
-      phone: guestData.phone,
-      email: guestData.email,
-      expires: Date.now() + (24 * 60 * 60 * 1000) // 24 hours
-    },
-    process.env.JWT_SECRET,
-    { expiresIn: '24h' }
-  );
+// Delete User Account
+exports.deleteUserAccount = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ 
+        message: 'Email and password confirmation required for account deletion' 
+      });
+    }
+
+    // Verify the user's credentials before deletion
+    const { data: verifyData, error: verifyError } = await supabase.auth.signInWithPassword({
+      email: email,
+      password: password
+    });
+
+    if (verifyError) {
+      return res.status(401).json({ 
+        message: 'Invalid credentials. Cannot delete account.' 
+      });
+    }
+
+    // Check if the authenticated user matches the account being deleted
+    if (verifyData.user.id !== userId) {
+      return res.status(403).json({ 
+        message: 'You can only delete your own account' 
+      });
+    }
+
+    // Delete user from Supabase Auth
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
+
+    if (deleteError) {
+      console.error('Account deletion error:', deleteError);
+      return res.status(500).json({ 
+        message: 'Failed to delete account. Please try again.' 
+      });
+    }
+
+    console.log('✅ User account deleted:', userId);
+
+    res.status(200).json({
+      message: 'Account deleted successfully',
+      deleted: true
+    });
+
+  } catch (error) {
+    console.error('Account deletion error:', error);
+    res.status(500).json({ 
+      message: 'Account deletion failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
 };
 
-// Initiate guest checkout
-// Initiate guest checkout - UPDATED VERSION
+// Get All Users (Admin only) - CLEAN VERSION
+exports.getAllUsers = async (req, res) => {
+  try {
+    console.log('🔐 Checking admin access for user:', req.user.email);
+    console.log('🔐 User role:', req.user.role);
+    
+    if (req.user.role !== 'admin') {
+      console.log('❌ Admin access denied for user:', req.user.email);
+      return res.status(403).json({ message: 'Admin access required' });
+    }
+
+    console.log('✅ Admin access granted, fetching users...');
+
+    // Get ALL users from Supabase Auth
+    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers();
+
+    if (authError) {
+      console.error('Error fetching users from Auth:', authError);
+      return res.status(500).json({ 
+        message: 'Failed to fetch users from authentication system',
+        error: process.env.NODE_ENV === 'development' ? authError.message : undefined
+      });
+    }
+
+    // Get ALL roles from clients table
+    const { data: clientRoles, error: clientError } = await supabase
+      .from('clients')
+      .select('id, role');
+
+    if (clientError) {
+      console.error('Error fetching client roles:', clientError);
+      return res.status(500).json({ 
+        message: 'Failed to fetch user roles',
+        error: process.env.NODE_ENV === 'development' ? clientError.message : undefined
+      });
+    }
+
+    // Create a map of user IDs to roles from clients table
+    const roleMap = new Map();
+    clientRoles.forEach(client => {
+      roleMap.set(client.id, client.role);
+    });
+
+    // Combine Auth users with roles from clients table
+    const formattedUsers = authUsers.users.map(authUser => {
+      const userRole = roleMap.get(authUser.id) || 'user';
+      
+      return {
+        id: authUser.id,
+        email: authUser.email,
+        username: authUser.user_metadata?.username,
+        full_name: authUser.user_metadata?.full_name,
+        phone: authUser.user_metadata?.phone,
+        role: userRole, // Only from clients table
+        email_confirmed: authUser.email_confirmed_at !== null,
+        created_at: authUser.created_at,
+        last_sign_in: authUser.last_sign_in_at,
+        has_special_role: roleMap.has(authUser.id)
+      };
+    });
+
+    console.log(`✅ Admin fetched ${formattedUsers.length} users`);
+
+    res.status(200).json({
+      message: 'Users retrieved successfully',
+      users: formattedUsers,
+      total: formattedUsers.length,
+      stats: {
+        total_users: formattedUsers.length,
+        admins: formattedUsers.filter(u => u.role === 'admin').length,
+        pharmacists: formattedUsers.filter(u => u.role === 'pharmacist').length,
+        regular_users: formattedUsers.filter(u => u.role === 'user').length,
+        with_special_roles: formattedUsers.filter(u => u.has_special_role).length
+      }
+    });
+
+  } catch (error) {
+    console.error('Get users error:', error);
+    res.status(500).json({ 
+      message: 'Failed to fetch users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Promote User to Admin/Pharmacist
+exports.promoteUser = async (req, res) => {
+  const { userId } = req.params;
+  const { role, pharmacy_id } = req.body;
+
+  try {
+    const allowedRoles = ['admin', 'pharmacist'];
+    
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).json({ 
+        message: 'Invalid role. Allowed roles: admin, pharmacist' 
+      });
+    }
+
+    // Get user info from auth
+    const { data: userData, error: userError } = await supabase.auth.admin.getUserById(userId);
+    
+    if (userError || !userData.user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const user = userData.user;
+
+    // ✅ FIXED: Only include fields that exist in clients table
+    const clientData = {
+      id: userId,
+      role: role
+      // Only id and role - no email, username, full_name, phone, pharmacy_id
+    };
+
+    const { error: clientError } = await supabase
+      .from('clients')
+      .upsert(clientData, { onConflict: 'id' });
+
+    if (clientError) {
+      console.error('Promotion error:', clientError);
+      return res.status(500).json({ 
+        message: 'Failed to promote user' 
+      });
+    }
+
+    console.log(`✅ User ${user.email} promoted to: ${role}`);
+
+    res.status(200).json({
+      message: `User successfully promoted to ${role}`,
+      user: {
+        id: userId,
+        email: user.email,
+        role: role
+        // No pharmacy_id since it's not in clients table
+      }
+    });
+
+  } catch (error) {
+    console.error('Promotion error:', error);
+    res.status(500).json({ 
+      message: 'Failed to promote user'
+    });
+  }
+};
+
+// Demote User to Regular User
+exports.demoteUser = async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    // Remove user from clients table (they become regular user)
+    const { error: clientError } = await supabase
+      .from('clients')
+      .delete()
+      .eq('id', userId);
+
+    if (clientError) {
+      console.error('Demotion error:', clientError);
+      return res.status(500).json({ 
+        message: 'Failed to demote user' 
+      });
+    }
+
+    console.log(`✅ User ${userId} demoted to regular user`);
+
+    res.status(200).json({
+      message: 'User successfully demoted to regular user',
+      userId: userId
+    });
+
+  } catch (error) {
+    console.error('Demotion error:', error);
+    res.status(500).json({ 
+      message: 'Failed to demote user'
+    });
+  }
+};
+
+// Admin Delete Any User Account - FIXED
+exports.adminDeleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ 
+        message: 'User ID is required' 
+      });
+    }
+
+    // ✅ FIRST: Check if user exists in clients table (admin/pharmacist)
+    const { data: clientData, error: clientCheckError } = await supabase
+      .from('clients')
+      .select('role')
+      .eq('id', userId)
+      .single();
+
+    if (clientCheckError && clientCheckError.code !== 'PGRST116') {
+      // PGRST116 means "no rows returned" - that's fine, user might not be in clients table
+      console.error('Error checking clients table:', clientCheckError);
+    }
+
+    // ✅ SECOND: Delete user from clients table if they exist there
+    if (clientData) {
+      const { error: clientDeleteError } = await supabase
+        .from('clients')
+        .delete()
+        .eq('id', userId);
+
+      if (clientDeleteError) {
+        console.error('Error deleting from clients table:', clientDeleteError);
+        // Don't return error here - still try to delete from Auth
+      } else {
+        console.log('✅ Removed user from clients table:', userId);
+      }
+    }
+
+    // ✅ THIRD: Delete user from Supabase Auth using admin API
+    const { error: deleteError } = await supabase.auth.admin.deleteUser(userId);
+
+    if (deleteError) {
+      console.error('Admin account deletion error:', deleteError);
+      return res.status(500).json({ 
+        message: 'Failed to delete user account',
+        error: process.env.NODE_ENV === 'development' ? deleteError.message : undefined
+      });
+    }
+
+    console.log('✅ Admin deleted user account:', userId);
+
+    res.status(200).json({
+      message: 'User account deleted successfully',
+      deleted: true,
+      userId: userId,
+      wasInClientsTable: !!clientData, // Inform if user was admin/pharmacist
+      previousRole: clientData?.role || null
+    });
+
+  } catch (error) {
+    console.error('Admin account deletion error:', error);
+    res.status(500).json({ 
+      message: 'Failed to delete user account',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// Guest Checkout
 exports.initiateGuestCheckout = async (req, res) => {
   const { name, phone, email } = req.body;
 
   try {
-    // Input validation
     if (!name || !phone) {
       return res.status(400).json({ 
         message: 'Name and phone number are required for guest checkout' 
       });
     }
 
-    // Validate phone format
-    const phoneRegex = /^[\+]?[1-9][\d]{0,15}$/;
-    const cleanPhone = phone.replace(/\D/g, '');
-    if (!phoneRegex.test(cleanPhone)) {
-      return res.status(400).json({ 
-        message: 'Please provide a valid phone number' 
-      });
-    }
-
-    // ✅ NEW: Check if email already has an account
+    // Check if email exists in Supabase Auth
     if (email) {
-      const existingUser = await pool.query(
-        'SELECT id, email, is_verified FROM users WHERE email = $1', 
-        [email]
-      );
-
-      if (existingUser.rows.length > 0) {
-        const user = existingUser.rows[0];
+      const { data, error } = await supabase.auth.getUser(email);
+      if (data?.user) {
         return res.status(400).json({ 
           message: `An account with email ${email} already exists. Please login instead.`,
           code: 'EMAIL_ALREADY_REGISTERED',
           existingEmail: email,
-          isVerified: user.is_verified,
           action: 'LOGIN_REQUIRED'
         });
       }
     }
 
     // Generate guest token
-    const guestToken = generateGuestToken({ name, phone: cleanPhone, email });
+    const guestToken = jwt.sign(
+      {
+        guestId: crypto.randomBytes(16).toString('hex'),
+        type: 'guest',
+        name: name,
+        phone: phone,
+        email: email,
+        expires: Date.now() + (24 * 60 * 60 * 1000)
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
 
     res.status(200).json({
       message: 'Guest session created successfully',
       guestToken,
-      guestData: { 
-        name, 
-        phone: cleanPhone, 
-        email: email || null 
-      }
+      guestData: { name, phone, email }
     });
 
   } catch (error) {
     console.error('Guest checkout initiation error:', error);
     res.status(500).json({ 
-      message: 'Failed to initiate guest checkout',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to initiate guest checkout'
     });
   }
 };
 
-// ✅ ADD THIS: Check guest order status
-exports.checkGuestOrderStatus = async (req, res) => {
-  const { confirmationCode } = req.params;
+// Middleware: User can only access their own data, or admin/pharmacist can access any
+const requireOwnUserOrAdmin = (req, res, next) => {
+  const requestedUserId = req.params.userId;
+  const authenticatedUserId = req.user.userId;
+  const userRole = req.user.role;
 
-  try {
-    if (!confirmationCode) {
-      return res.status(400).json({ message: 'Confirmation code is required' });
-    }
+  console.log('🔐 requireOwnUserOrAdmin check:', {
+    requestedUserId,
+    authenticatedUserId,
+    userRole,
+    isSameUser: requestedUserId === authenticatedUserId,
+    isAdminOrPharmacist: ['admin', 'pharmacist'].includes(userRole)
+  });
 
-    const result = await pool.query(`
-      SELECT 
-        o.*,
-        p.name as pharmacy_name,
-        p.contact_phone as pharmacy_phone,
-        p.contact_email as pharmacy_email,
-        -- Prescription status
-        pr.status as prescription_status,
-        pr.notes as prescription_notes,
-        pr.updated_at as prescription_updated,
-        u.full_name as reviewed_by
-      FROM orders o
-      JOIN pharmacies p ON o.pharmacy_id = p.id
-      LEFT JOIN prescriptions pr ON o.id = pr.order_id
-      LEFT JOIN users u ON pr.pharmacist_id = u.id
-      WHERE o.confirmation_code = $1 
-        AND o.is_guest_order = true
-    `, [confirmationCode]);
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-
-    const order = result.rows[0];
-
-    // Get order items
-    const itemsResult = await pool.query(
-      `SELECT oi.*, m.name as medication_name 
-       FROM order_items oi 
-       JOIN medications m ON oi.medication_id = m.id 
-       WHERE order_id = $1`,
-      [order.id]
-    );
-
-    res.json({
-      order: order,
-      items: itemsResult.rows,
-      isGuestOrder: true
-    });
-
-  } catch (error) {
-    console.error('Check guest order status error:', error);
-    res.status(500).json({ 
-      message: 'Failed to check order status',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
+  // Allow if:
+  // 1. User is accessing their own data OR
+  // 2. User is admin/pharmacist
+  if (requestedUserId === authenticatedUserId || ['admin', 'pharmacist'].includes(userRole)) {
+    return next();
   }
+
+  console.log('❌ Access denied - user cannot access another user\'s data');
+  return res.status(403).json({ 
+    message: 'Access denied. You can only access your own data.' 
+  });
+};
+
+// Middleware: User can only access their own data
+const requireOwnUser = (req, res, next) => {
+  const requestedUserId = req.params.userId;
+  const authenticatedUserId = req.user.userId;
+
+  console.log('🔐 requireOwnUser check:', {
+    requestedUserId,
+    authenticatedUserId,
+    isSameUser: requestedUserId === authenticatedUserId
+  });
+
+  if (requestedUserId === authenticatedUserId) {
+    return next();
+  }
+
+  console.log('❌ Access denied - user cannot access another user\'s data');
+  return res.status(403).json({ 
+    message: 'Access denied. You can only access your own data.' 
+  });
 };
 
 
-exports.getPharmacies = async (req, res) => {
-  try {
-    console.log('🏪 GET /api/guest/pharmacies called');
-    
-    const result = await pool.query(`
-      SELECT 
-        id, 
-        name, 
-        address, 
-        contact_phone, 
-        contact_email,
-        created_at,
-        updated_at
-      FROM pharmacies 
-      ORDER BY name
-    `);
-    
-    console.log(`✅ Found ${result.rows.length} pharmacies`);
-    
-    res.json({ 
-      success: true,
-      pharmacies: result.rows 
-    });
-    
-  } catch (error) {
-    console.error('💥 Get pharmacies error:', error);
-    res.status(500).json({ 
-      success: false,
-      message: 'Failed to fetch pharmacies',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
+// Export middleware for use in routes
+exports.authenticateToken = authenticateToken;
+exports.requireAdmin = requireAdmin;
+exports.requirePharmacist = requirePharmacist;
+exports.requireAdminOrPharmacist = requireAdminOrPharmacist;
+exports.requireOwnUserOrAdmin = requireOwnUserOrAdmin; // Add this
+exports.requireOwnUser = requireOwnUser; // Add this

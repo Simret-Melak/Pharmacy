@@ -1,60 +1,67 @@
 const express = require('express');
-const { checkAuth } = require('../middleware/authMiddleware');
+const { authenticateToken, requireAdmin, requireAdminOrPharmacist } = require('../controllers/authController');
 const prescriptionController = require('../controllers/prescriptionController');
-const upload = require('../config/multerConfig');
+const { prescriptionUpload, handleMulterError } = require('../config/multerR2Config'); // ✅ Updated import
 
 const router = express.Router();
 
-const checkAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ message: 'Admin access required' });
-  }
-  next();
-};
+// Apply authentication to all routes
+router.use(authenticateToken);
 
-router.use(checkAuth);
+// === USER ROUTES === //
 
-// Upload prescription
+// Upload prescription for a medication
 router.post(
-  '/medications/:id/prescriptions',
-  upload.single('prescription'),
+  '/upload/:medicationId',
+  prescriptionUpload.single('prescription'), // ✅ Use prescriptionUpload
+  handleMulterError, // ✅ Add error handling middleware
   prescriptionController.uploadPrescription
 );
 
-// Get user's own prescriptions - REGULAR USERS ONLY
-router.get('/my', prescriptionController.getMyPrescriptions);
-
-// === ADMIN ROUTES === //
-// Get all prescriptions (admin only)
+// Get user's own prescriptions
 router.get(
-  '/all',
-  checkAdmin,
-  prescriptionController.getAllPrescriptions
+  '/my-prescriptions', // ✅ Fixed route name to match your controller
+  prescriptionController.getMyPrescriptions
 );
 
-// Get specific prescription details (admin only)
+// Get specific prescription details (users can only see their own)
 router.get(
   '/:id',
-  checkAdmin,
   prescriptionController.getPrescriptionDetails
 );
 
-// Update prescription status (admin only)
-router.put(
-  '/:id/status',
-  checkAdmin,
-  prescriptionController.updatePrescriptionStatus
-);
-
-// File operations (both user and admin, with proper auth in controller)
+// View prescription file (users can only view their own)
 router.get(
-  '/file/:id/view',
+  '/:id/view',
   prescriptionController.viewPrescriptionFile
 );
 
+// Download prescription file (users can only download their own)
 router.get(
-  '/file/:id/download',
+  '/:id/download',
   prescriptionController.downloadPrescription
+);
+
+// Delete prescription (users can only delete their own pending ones)
+router.delete(
+  '/:id',
+  prescriptionController.deletePrescription
+);
+
+// === ADMIN/PHARMACIST ROUTES === //
+
+// Get all prescriptions (admin/pharmacist only)
+router.get(
+  '/',
+  requireAdminOrPharmacist,
+  prescriptionController.getAllPrescriptions
+);
+
+// Update prescription status (admin/pharmacist only)
+router.patch(
+  '/:id/status',
+  requireAdminOrPharmacist,
+  prescriptionController.updatePrescriptionStatus
 );
 
 module.exports = router;

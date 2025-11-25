@@ -2,12 +2,8 @@
 const express = require('express');
 const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
-const {
-  initiateGuestCheckout,
-  checkGuestOrderStatus,
-  getPharmacies
-} = require('../controllers/authController');
-const medicationController = require('../controllers/medicationController'); // Add this
+const guestController = require('../controllers/guestController'); // ✅ Check this path
+const medicationController = require('../controllers/medicationController');
 
 const router = express.Router();
 
@@ -19,21 +15,21 @@ const guestLimiter = rateLimit({
   legacyHeaders: false
 });
 
-// ✅ Guest Medication Routes (No authentication)
+// ✅ Guest Medication Routes
 router.get('/medications', medicationController.getMedications);
 router.get('/medications/:id', medicationController.getMedicationById);
 router.get('/medications/:medicationId/prescription-check', 
   medicationController.checkPrescriptionRequirement
 );
 
-// ✅ Existing Guest Routes
+// ✅ Guest Checkout Routes - FIXED
 router.post('/initiate', guestLimiter, [
   body('name').notEmpty().trim().isLength({ min: 2 }),
   body('phone').notEmpty().matches(/^[\+]?[1-9][\d]{0,15}$/),
   body('email').optional().isEmail().normalizeEmail()
-], initiateGuestCheckout);
+], guestController.initiateGuestCheckout); // ✅ This should now work
 
-router.get('/order/:confirmationCode', guestLimiter, checkGuestOrderStatus);
-router.get('/pharmacies', getPharmacies);
+router.get('/order/:confirmationCode', guestLimiter, guestController.checkGuestOrderStatus);
+router.get('/pharmacies', guestController.getPharmacies);
 
 module.exports = router;

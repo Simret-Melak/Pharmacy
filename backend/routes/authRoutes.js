@@ -2,11 +2,20 @@ const express = require('express');
 const { body } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
+
+// ✅ SINGLE IMPORT - No duplicates
 const {
   registerUser,
   loginUser,
-  verifyEmail,
-  resendVerificationEmail
+  logoutUser,
+  deleteUserAccount,
+  getAllUsers,
+  adminDeleteUser,
+  promoteUser,
+  demoteUser,
+  initiateGuestCheckout,
+  authenticateToken,
+  requireAdmin
 } = require('../controllers/authController');
 
 const router = express.Router();
@@ -24,7 +33,34 @@ const authLimiter = rateLimit({
   skipSuccessfulRequests: true
 });
 
-// Registration
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: 'Too many requests, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ✅ GUEST CHECKOUT ROUTE
+router.post(
+  '/guest/initiate',
+  generalLimiter,
+  [
+    body('name')
+      .notEmpty()
+      .withMessage('Name is required')
+      .trim()
+      .isLength({ min: 2 }),
+    body('phone')
+      .notEmpty()
+      .withMessage('Phone number is required')
+      .trim()
+      .isLength({ min: 10 })
+  ],
+  initiateGuestCheckout
+);
+
+// Public routes
 router.post(
   '/register',
   authLimiter,
@@ -51,7 +87,6 @@ router.post(
   registerUser
 );
 
-// Login
 router.post(
   '/login',
   authLimiter,
@@ -67,8 +102,69 @@ router.post(
   loginUser
 );
 
-// Email Verification
-router.get('/verify-email', verifyEmail);
-router.post('/resend-verification', authLimiter, resendVerificationEmail);
+// Protected routes (require authentication)
+router.post(
+  '/logout',
+  generalLimiter,
+  authenticateToken,
+  logoutUser
+);
+
+router.delete(
+  '/account',
+  generalLimiter,
+  authenticateToken,
+  [
+    body('email')
+      .isEmail()
+      .withMessage('Valid email required for confirmation')
+      .normalizeEmail(),
+    body('password')
+      .notEmpty()
+      .withMessage('Password confirmation is required')
+  ],
+  deleteUserAccount
+);
+
+// Admin-only routes
+router.get(
+  '/users',
+  generalLimiter,
+  authenticateToken,
+  requireAdmin,
+  getAllUsers
+);
+
+router.delete(
+  '/users/:userId',
+  generalLimiter,
+  authenticateToken,
+  requireAdmin,
+  adminDeleteUser
+);
+
+// ✅ ADDED: Promote user route
+router.post(
+  '/users/:userId/promote',
+  generalLimiter,
+  authenticateToken,
+  requireAdmin,
+  [
+    body('role')
+      .isIn(['admin', 'pharmacist'])
+      .withMessage('Role must be either admin or pharmacist')
+  ],
+  promoteUser
+);
+
+// ✅ ADDED: Demote user route
+router.post(
+  '/users/:userId/demote',
+  generalLimiter,
+  authenticateToken,
+  requireAdmin,
+  demoteUser
+);
+
 
 module.exports = router;
